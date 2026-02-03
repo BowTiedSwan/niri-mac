@@ -73,6 +73,7 @@ You can check on [wayland.app](https://wayland.app) at the bottom of each protoc
 - **Performance**: while I run niri on beefy machines, I try to stay conscious of performance.
 I've seen someone use it fine on an Eee PC 900 from 2008, of all things.
 - **Xwayland**: [integrated](https://yalter.github.io/niri/Xwayland.html#using-xwayland-satellite) via xwayland-satellite starting from niri 25.08.
+- **macOS**: niri can run in windowed mode on macOS for development and testing. See the [Getting Started](https://yalter.github.io/niri/Getting-Started.html) page for build instructions.
 
 ## Media
 
