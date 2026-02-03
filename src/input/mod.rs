@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use calloop::timer::{TimeoutAction, Timer};
+#[cfg(target_os = "linux")]
 use input::event::gesture::GestureEventCoordinates as _;
 use niri_config::{
     Action, Bind, Binds, Config, Key, ModKey, Modifiers, MruDirection, SwitchBinds, Trigger, Xkb,
@@ -18,6 +19,7 @@ use smithay::backend::input::{
     TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent,
     TabletToolTipState, TouchEvent,
 };
+#[cfg(target_os = "linux")]
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::dnd::DnDGrab;
 use smithay::input::keyboard::{keysyms, FilterResult, Keysym, Layout, ModifiersState};
@@ -194,6 +196,7 @@ impl State {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn process_libinput_event(&mut self, event: &mut InputEvent<LibinputInputBackend>) {
         let _span = tracy_client::span!("process_libinput_event");
 
@@ -3808,6 +3811,8 @@ impl State {
         let mut delta_x = event.delta_x();
         let mut delta_y = event.delta_y();
 
+        // On Linux, try to use libinput's unaccelerated values
+        #[cfg(target_os = "linux")]
         if let Some(libinput_event) =
             (&event as &dyn Any).downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
         {
@@ -3817,13 +3822,19 @@ impl State {
 
         let uninverted_delta_y = delta_y;
 
-        let device = event.device();
-        if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
-            if device.config_scroll_natural_scroll_enabled() {
-                delta_x = -delta_x;
-                delta_y = -delta_y;
+        // On Linux, check natural scroll setting from libinput
+        #[cfg(target_os = "linux")]
+        {
+            let device = event.device();
+            if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
+                if device.config_scroll_natural_scroll_enabled() {
+                    delta_x = -delta_x;
+                    delta_y = -delta_y;
+                }
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = event.device(); // Suppress unused warning
 
         let is_overview_open = self.niri.layout.is_overview_open();
 
@@ -4689,6 +4700,7 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
     })
 }
 
+#[cfg(target_os = "linux")]
 pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::Device) {
     // According to Mutter code, this setting is specific to touchpads.
     let is_touchpad = device.config_tap_finger_count() > 0;

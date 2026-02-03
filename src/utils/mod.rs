@@ -43,6 +43,8 @@ pub mod vblank_throttle;
 pub mod watcher;
 pub mod xwayland;
 
+/// Whether niri is running as a systemd service (Linux-only).
+#[cfg(target_os = "linux")]
 pub static IS_SYSTEMD_SERVICE: AtomicBool = AtomicBool::new(false);
 
 use id::IdCounter;
@@ -525,7 +527,7 @@ pub fn baba_is_float_offset(now: Duration, view_height: f64) -> f64 {
     amplitude * ((f64::consts::TAU * now / 3.6).sin() - 1.)
 }
 
-#[cfg(feature = "dbus")]
+#[cfg(all(feature = "dbus", target_os = "linux"))]
 pub fn show_screenshot_notification(image_path: Option<&Path>) -> anyhow::Result<()> {
     use std::collections::HashMap;
 
