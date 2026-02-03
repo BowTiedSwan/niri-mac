@@ -207,6 +207,57 @@ If you're not on NixOS, you may need [NixGL](https://github.com/nix-community/ni
 nix run --impure github:guibou/nixGL -- ./results/bin/niri
 ```
 
+### macOS
+
+On macOS, niri runs in **windowed mode only** (via the Winit backend). This is primarily useful for development and testing, as niri cannot act as a full display server on macOS.
+
+> [!NOTE]
+> The macOS build does not include Linux-specific features like D-Bus integration, systemd support, or screencasting via PipeWire. These features require Linux-only libraries.
+
+#### Prerequisites
+
+1. Install [Homebrew](https://brew.sh/) if you haven't already.
+
+2. Install the required dependencies:
+
+    ```sh
+    brew install pkg-config pango cairo
+    ```
+
+3. Install Rust via [rustup](https://rustup.rs/):
+
+    ```sh
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+#### Building
+
+Build niri without the default Linux-specific features:
+
+```sh
+cargo build --release --no-default-features
+```
+
+The binary will be at `target/release/niri`.
+
+#### Running
+
+Run niri in windowed mode:
+
+```sh
+./target/release/niri
+```
+
+When running in a window, the Mod key is <kbd>Alt</kbd> (instead of <kbd>Super</kbd> on Linux TTY).
+
+#### Limitations on macOS
+
+- **Windowed mode only**: niri cannot act as a native macOS display server
+- **No D-Bus**: Features that rely on D-Bus (like accessibility, power key handling) are unavailable
+- **No systemd/dinit**: Session management features are not available
+- **No screencasting**: PipeWire-based screencasting is not available
+- **Development use**: The windowed mode is mainly intended for development and testing
+
 ### Manual Installation
 
 If installing directly without a package, the recommended file destinations are slightly different.
