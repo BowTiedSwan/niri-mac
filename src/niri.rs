@@ -112,8 +112,11 @@ use smithay::wayland::xdg_foreign::XdgForeignState;
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
 use crate::animation::Clock;
+#[cfg(target_os = "linux")]
 use crate::backend::tty::SurfaceDmabufFeedback;
-use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
+#[cfg(target_os = "linux")]
+use crate::backend::Tty;
+use crate::backend::{Backend, Headless, RenderResult, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_locale1::Locale1ToNiri;
@@ -128,9 +131,10 @@ use crate::handlers::{configure_lock_surface, XDG_ACTIVATION_TOKEN_TIMEOUT};
 use crate::input::pick_color_grab::PickColorGrab;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
+#[cfg(target_os = "linux")]
+use crate::input::apply_libinput_settings;
 use crate::input::{
-    apply_libinput_settings, mods_with_finger_scroll_binds, mods_with_mouse_binds,
-    mods_with_wheel_binds, TabletData,
+    mods_with_finger_scroll_binds, mods_with_mouse_binds, mods_with_wheel_binds, TabletData,
 };
 use crate::ipc::server::IpcServer;
 use crate::layer::mapped::LayerSurfaceRenderElement;
@@ -721,9 +725,21 @@ impl State {
             let winit = Winit::new(config.clone(), event_loop.clone())?;
             Backend::Winit(winit)
         } else {
-            let tty = Tty::new(config.clone(), event_loop.clone())
-                .context("error initializing the TTY backend")?;
-            Backend::Tty(tty)
+            // TTY backend is only available on Linux
+            #[cfg(target_os = "linux")]
+            {
+                let tty = Tty::new(config.clone(), event_loop.clone())
+                    .context("error initializing the TTY backend")?;
+                Backend::Tty(tty)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // On non-Linux platforms, fall back to Winit even without a display
+                // This allows running niri in windowed mode on macOS
+                warn!("TTY backend is not available on this platform, falling back to Winit");
+                let winit = Winit::new(config.clone(), event_loop.clone())?;
+                Backend::Winit(winit)
+            }
         };
 
         let mut niri = Niri::new(
@@ -1630,12 +1646,15 @@ impl State {
             self.ipc_keyboard_layouts_changed();
         }
 
+        #[cfg(target_os = "linux")]
         if libinput_config_changed {
             let config = self.niri.config.borrow();
             for mut device in self.niri.devices.iter().cloned() {
                 apply_libinput_settings(&config.input, &mut device);
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = libinput_config_changed;
 
         if ignored_nodes_changed {
             self.backend.update_ignored_nodes_config(&mut self.niri);
@@ -2287,7 +2306,10 @@ impl Niri {
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let xdg_foreign_state = XdgForeignState::new::<State>(&display_handle);
 
+        #[cfg(target_os = "linux")]
         let is_tty = matches!(backend, Backend::Tty(_));
+        #[cfg(not(target_os = "linux"))]
+        let is_tty = false;
         let gamma_control_manager_state =
             GammaControlManagerState::new::<State, _>(&display_handle, move |client| {
                 is_tty && !client.get_data::<ClientState>().unwrap().restricted
@@ -4608,6 +4630,7 @@ impl Niri {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn send_dmabuf_feedbacks(
         &self,
         output: &Output,

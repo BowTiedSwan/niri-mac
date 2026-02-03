@@ -20,7 +20,64 @@
 
 pub use platform::*;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::io;
+
+    // On macOS, we use a simpler signal handling approach since signalfd is not available.
+    // The calloop signals feature works on macOS using signal handlers.
+
+    pub fn listen(handle: &calloop::LoopHandle<crate::niri::State>) {
+        use calloop::signals::{Signal, Signals};
+
+        // Try to set up signal handling. If it fails, log and continue.
+        match Signals::new([Signal::SIGINT, Signal::SIGTERM, Signal::SIGHUP]) {
+            Ok(signals) => {
+                if let Err(err) = handle.insert_source(signals, |event, _, state| {
+                    info!("quitting due to receiving signal {:?}", event.signal());
+                    state.niri.stop_signal.stop();
+                }) {
+                    warn!("error inserting signal source: {err:?}");
+                }
+            }
+            Err(err) => {
+                warn!("error creating signal handler: {err:?}");
+            }
+        }
+    }
+
+    // On macOS, we use pthread_sigmask similar to Linux but with different implementation.
+    pub fn block_early() -> io::Result<()> {
+        // On macOS, we let signals be delivered normally through the signal handler
+        // set up in listen(). The calloop Signals source handles the complexity.
+        Ok(())
+    }
+
+    pub fn unblock_all() -> io::Result<()> {
+        // Clear the signal mask so children can receive signals normally.
+        set_sigmask(&empty_sigset()?)
+    }
+
+    fn empty_sigset() -> io::Result<libc::sigset_t> {
+        let mut sigset = std::mem::MaybeUninit::uninit();
+        if unsafe { libc::sigemptyset(sigset.as_mut_ptr()) } == 0 {
+            Ok(unsafe { sigset.assume_init() })
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn set_sigmask(set: &libc::sigset_t) -> io::Result<()> {
+        let oldset = std::ptr::null_mut();
+        if unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, set, oldset) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
     use std::io;
 

@@ -4,6 +4,7 @@ extern crate tracing;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Write};
+#[cfg(target_os = "linux")]
 use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::process::Command;
@@ -24,12 +25,18 @@ use niri::utils::spawning::{
     spawn, spawn_sh, store_and_increase_nofile_rlimit, CHILD_DISPLAY, CHILD_ENV,
     REMOVE_ENV_RUST_BACKTRACE, REMOVE_ENV_RUST_LIB_BACKTRACE,
 };
-use niri::utils::{cause_panic, version, watcher, xwayland, IS_SYSTEMD_SERVICE};
+#[cfg(target_os = "linux")]
+use niri::utils::IS_SYSTEMD_SERVICE;
+use niri::utils::{cause_panic, version, watcher, xwayland};
 use niri_config::{Config, ConfigPath};
 use niri_ipc::socket::SOCKET_PATH_ENV;
+#[cfg(target_os = "linux")]
 use sd_notify::NotifyState;
-use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
+
+// Wayland display is Linux-only
+#[cfg(target_os = "linux")]
+use smithay::reexports::wayland_server::Display;
 
 const DEFAULT_LOG_FILTER: &str = "niri=debug,smithay::backend::renderer::gles=error";
 
@@ -57,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(env_filter)
         .init();
 
+    #[cfg(target_os = "linux")]
     if env::var_os("NOTIFY_SOCKET").is_some() {
         IS_SYSTEMD_SERVICE.store(true, Ordering::Relaxed);
 
@@ -228,6 +236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.niri.a11y.start();
     }
 
+    #[cfg(target_os = "linux")]
     if env::var_os("NIRI_DISABLE_SYSTEM_MANAGER_NOTIFY").is_none_or(|x| x != "1") {
         // Notify systemd we're ready.
         if let Err(err) = sd_notify::notify(true, &[NotifyState::Ready]) {
@@ -278,43 +287,68 @@ fn import_environment() {
     ]
     .join(" ");
 
-    let mut init_system_import = String::new();
-    if cfg!(feature = "systemd") {
-        write!(
-            init_system_import,
-            "systemctl --user import-environment {variables};"
-        )
-        .unwrap();
-    }
-    if cfg!(feature = "dinit") {
-        write!(init_system_import, "dinitctl setenv {variables};").unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let mut init_system_import = String::new();
+        if cfg!(feature = "systemd") {
+            write!(
+                init_system_import,
+                "systemctl --user import-environment {variables};"
+            )
+            .unwrap();
+        }
+        if cfg!(feature = "dinit") {
+            write!(init_system_import, "dinitctl setenv {variables};").unwrap();
+        }
+
+        let rv = Command::new("/bin/sh")
+            .args([
+                "-c",
+                &format!(
+                    "{init_system_import}\
+                     hash dbus-update-activation-environment 2>/dev/null && \
+                     dbus-update-activation-environment {variables}"
+                ),
+            ])
+            .spawn();
+        // Wait for the import process to complete, otherwise services will start too fast without
+        // environment variables available.
+        match rv {
+            Ok(mut child) => match child.wait() {
+                Ok(status) => {
+                    if !status.success() {
+                        warn!("import environment shell exited with {status}");
+                    }
+                }
+                Err(err) => {
+                    warn!("error waiting for import environment shell: {err:?}");
+                }
+            },
+            Err(err) => {
+                warn!("error spawning shell to import environment: {err:?}");
+            }
+        }
     }
 
-    let rv = Command::new("/bin/sh")
-        .args([
-            "-c",
-            &format!(
-                "{init_system_import}\
-                 hash dbus-update-activation-environment 2>/dev/null && \
-                 dbus-update-activation-environment {variables}"
-            ),
-        ])
-        .spawn();
-    // Wait for the import process to complete, otherwise services will start too fast without
-    // environment variables available.
-    match rv {
-        Ok(mut child) => match child.wait() {
-            Ok(status) => {
-                if !status.success() {
-                    warn!("import environment shell exited with {status}");
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, we use launchctl to set environment variables for GUI apps
+        for var in ["WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", SOCKET_PATH_ENV] {
+            if let Ok(value) = env::var(var) {
+                let rv = Command::new("launchctl")
+                    .args(["setenv", var, &value])
+                    .spawn();
+                match rv {
+                    Ok(mut child) => {
+                        if let Err(err) = child.wait() {
+                            warn!("error waiting for launchctl: {err:?}");
+                        }
+                    }
+                    Err(err) => {
+                        trace!("launchctl setenv failed (this is expected if not running as GUI session): {err:?}");
+                    }
                 }
             }
-            Err(err) => {
-                warn!("error waiting for import environment shell: {err:?}");
-            }
-        },
-        Err(err) => {
-            warn!("error spawning shell to import environment: {err:?}");
         }
     }
 }
@@ -337,7 +371,19 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/niri/config.kdl")
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/etc/niri/config.kdl")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, use /usr/local/etc for system-wide configs
+        PathBuf::from("/usr/local/etc/niri/config.kdl")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        PathBuf::from("/etc/niri/config.kdl")
+    }
 }
 
 fn config_path(cli_path: Option<PathBuf>) -> ConfigPath {
@@ -358,6 +404,7 @@ fn config_path(cli_path: Option<PathBuf>) -> ConfigPath {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn notify_fd() -> anyhow::Result<()> {
     let fd = match env::var("NOTIFY_FD") {
         Ok(notify_fd) => notify_fd.parse()?,
